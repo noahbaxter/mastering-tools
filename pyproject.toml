@@ -13,8 +13,12 @@ dependencies = [
 ]
 
 [project.scripts]
+mastering = "mastering_tools.cli:main"
 declick = "mastering_tools.declick:main"
 loudness = "mastering_tools.loudness:main"
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.5.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

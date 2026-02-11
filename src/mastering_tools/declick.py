@@ -591,20 +591,19 @@ def cmd_batch_repair(args):
         print("No issues found.")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Detect and remove digital clicks/dropouts from audio files.",
-        epilog="Examples:\n"
-               "  declick -d input.wav              Fix dropouts in single file\n"
-               "  declick -d ~/recordings/          Fix all files in folder\n"
-               "  declick -d '*.wav'                Fix all matching files\n"
-               "  declick -da ~/recordings/         Analyze only (no changes)",
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+def _build_parser(parser=None):
+    if parser is None:
+        parser = argparse.ArgumentParser(
+            description="Detect and remove digital clicks/dropouts from audio files.",
+            epilog="Examples:\n"
+                   "  declick -d input.wav              Fix dropouts in single file\n"
+                   "  declick -d ~/recordings/          Fix all files in folder\n"
+                   "  declick -d '*.wav'                Fix all matching files\n"
+                   "  declick -da ~/recordings/         Analyze only (no changes)",
+            formatter_class=argparse.RawDescriptionHelpFormatter
+        )
     parser.add_argument("inputs", nargs="+", help="Input file(s), glob pattern, or directory")
     parser.add_argument("-o", "--output", help="Output to different file (default: in-place)")
-
-    # Detection modes (at least one required)
     parser.add_argument(
         "-d", "--dropouts", action="store_true",
         help="Detect zero-sample dropouts (e.g., ADAT sync errors)"
@@ -613,8 +612,6 @@ def main():
         "-c", "--clicks", action="store_true",
         help="Detect single-sample clicks (ratio-based detection)"
     )
-
-    # Click detection tuning
     parser.add_argument(
         "-r", "--ratio", type=float, default=10.0,
         help="Click detection ratio threshold (default: 10.0, lower=more aggressive)"
@@ -623,19 +620,19 @@ def main():
         "-m", "--min-diff", type=float, default=0.01,
         help="Click detection minimum difference (default: 0.01)"
     )
-
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("-b", "--backup", action="store_true", help="Create backup before in-place repair")
     parser.add_argument(
         "-a", "--analyze", action="store_true",
         help="Analyze files without repairing (counts events)"
     )
+    return parser
 
-    args = parser.parse_args()
 
-    # Require at least one detection mode
+def _dispatch(args):
     if not args.dropouts and not args.clicks:
-        parser.error("Specify at least one detection mode: -d (dropouts) and/or -c (clicks)")
+        print("Error: Specify at least one detection mode: -d (dropouts) and/or -c (clicks)", file=sys.stderr)
+        sys.exit(1)
 
     if args.analyze:
         cmd_analyze(args)
@@ -643,6 +640,20 @@ def main():
         cmd_repair(args)
     else:
         cmd_batch_repair(args)
+
+
+def register_subcommand(subparsers):
+    parser = subparsers.add_parser("declick", help="Detect and remove digital clicks/dropouts")
+    _build_parser(parser)
+    parser.set_defaults(func=_dispatch)
+
+
+def main():
+    parser = _build_parser()
+    args = parser.parse_args()
+    if not args.dropouts and not args.clicks:
+        parser.error("Specify at least one detection mode: -d (dropouts) and/or -c (clicks)")
+    _dispatch(args)
 
 
 if __name__ == "__main__":
