@@ -36,15 +36,16 @@ def parse_ebur128_output(output: str) -> dict:
     """Parse ffmpeg ebur128 output."""
     data = {
         "momentary_values": [],
+        "short_term_values": [],
         "timestamps": [],
         "true_peak": None,
         "integrated_lufs": None,
         "loudness_range": None,
     }
 
-    # Parse frame-by-frame momentary loudness
+    # Parse frame-by-frame momentary and short-term loudness
     # Format: [Parsed_ebur128_0 @ ...] t: 0.0999773  TARGET:-23 LUFS    M:-120.7 S:-120.7 ...
-    frame_pattern = re.compile(r"t:\s*([\d.]+)\s+TARGET.*?M:\s*([-\d.]+)")
+    frame_pattern = re.compile(r"t:\s*([\d.]+)\s+TARGET.*?M:\s*([-\d.]+)\s+S:\s*([-\d.]+)")
 
     for line in output.split("\n"):
         if "Parsed_ebur128" in line and "M:" in line and "TARGET" in line:
@@ -52,9 +53,11 @@ def parse_ebur128_output(output: str) -> dict:
             if match:
                 timestamp = float(match.group(1))
                 momentary = float(match.group(2))
-                if momentary > -120:  # Filter out silence/invalid readings
+                short_term = float(match.group(3))
+                if momentary > -120:
                     data["timestamps"].append(timestamp)
                     data["momentary_values"].append(momentary)
+                    data["short_term_values"].append(short_term)
 
             # Also grab true peak from frame data (TPK field at end)
             tpk_match = re.search(r"TPK:\s*([-\d.]+)\s+([-\d.]+)\s*dBFS", line)
@@ -129,18 +132,54 @@ def find_loudness_changes(timestamps: list, values: list, threshold_db: float = 
     return changes
 
 
-def format_timestamp(seconds: float) -> str:
-    """Format seconds as MM:SS.s"""
-    mins = int(seconds // 60)
-    secs = seconds % 60
-    return f"{mins}:{secs:04.1f}"
+from mastering_tools.utils import format_timestamp, format_time_short
 
 
-def format_time_short(seconds: float) -> str:
-    """Format seconds as M:SS"""
-    mins = int(seconds // 60)
-    secs = int(seconds % 60)
-    return f"{mins}:{secs:02d}"
+def _find_transition_indices(values: list, window_samples: int, min_segment_samples: int, threshold_db: float) -> list[int]:
+    """Two-pass transition detection: coarse scan then narrow refinement."""
+    # Pass 1: coarse 2-second window, find peak delta in each crossing region
+    candidates = []
+    i = window_samples
+    last_transition = 0
+    while i < len(values) - window_samples:
+        if i - last_transition < min_segment_samples:
+            i += 1
+            continue
+
+        prev_avg = statistics.mean(values[i - window_samples:i])
+        next_avg = statistics.mean(values[i:i + window_samples])
+        delta = abs(next_avg - prev_avg)
+
+        if delta >= threshold_db:
+            # Scan forward to find where delta peaks within this crossing
+            best_idx, best_delta = i, delta
+            for j in range(i + 1, min(len(values) - window_samples, i + window_samples)):
+                dj = abs(statistics.mean(values[j:j + window_samples]) -
+                         statistics.mean(values[j - window_samples:j]))
+                if dj > best_delta:
+                    best_delta, best_idx = dj, j
+            candidates.append(best_idx)
+            last_transition = best_idx
+            i = best_idx + window_samples
+        else:
+            i += 1
+
+    # Pass 2: refine with narrow window (0.5s ≈ window_samples/4)
+    narrow = max(2, window_samples // 4)
+    neighborhood = max(3, window_samples // 2)
+    refined = []
+    for idx in candidates:
+        best_idx, best_delta = idx, 0
+        scan_start = max(narrow, idx - neighborhood)
+        scan_end = min(len(values) - narrow, idx + neighborhood)
+        for j in range(scan_start, scan_end):
+            dj = abs(statistics.mean(values[j:j + narrow]) -
+                     statistics.mean(values[j - narrow:j]))
+            if dj > best_delta:
+                best_delta, best_idx = dj, j
+        refined.append(best_idx)
+
+    return refined
 
 
 def find_segments(timestamps: list, values: list, threshold_db: float = 4.0, min_segment_sec: float = 5.0) -> list:
@@ -156,32 +195,9 @@ def find_segments(timestamps: list, values: list, threshold_db: float = 4.0, min
     window_samples = max(3, int(2.0 / avg_interval))  # 2 second window for smoothing
     min_segment_samples = max(5, int(min_segment_sec / avg_interval))
 
-    # Find transition points using sliding window comparison
-    transitions = [0]  # Always start with beginning
-
-    i = window_samples
-    last_transition = 0
-    while i < len(values) - window_samples:
-        # Skip if too close to last transition
-        if i - last_transition < min_segment_samples:
-            i += 1
-            continue
-
-        prev_window = values[i - window_samples:i]
-        next_window = values[i:i + window_samples]
-
-        prev_avg = statistics.mean(prev_window)
-        next_avg = statistics.mean(next_window)
-        delta = abs(next_avg - prev_avg)
-
-        if delta >= threshold_db:
-            transitions.append(i)
-            last_transition = i
-            i += window_samples  # Skip ahead
-        else:
-            i += 1
-
-    transitions.append(len(values) - 1)  # End point
+    transitions = [0]
+    transitions.extend(_find_transition_indices(values, window_samples, min_segment_samples, threshold_db))
+    transitions.append(len(values) - 1)
 
     # Build segments from transitions
     segments = []
@@ -229,38 +245,74 @@ def analyze_segments(filepath: str, threshold: float = 4.0, min_len: float = 5.0
 
     if not segments:
         print("Could not detect distinct segments.")
-        return
+        return {
+            "name": stats["name"], "body_avg": None, "body_gain": None,
+            "true_peak": stats["true_peak"], "peak_after_gain": None,
+            "integrated_lufs": stats["integrated_lufs"],
+            "loudness_range": stats["loudness_range"], "is_wall": False,
+        }
 
     # Find loudest segment (by average) for relative mode and labeling
     audible = [s["avg_lufs"] for s in segments if s["avg_lufs"] > -60]
     if not audible:
         print("All segments are silence.")
-        return
+        return {
+            "name": stats["name"], "body_avg": None, "body_gain": None,
+            "true_peak": stats["true_peak"], "peak_after_gain": None,
+            "integrated_lufs": stats["integrated_lufs"],
+            "loudness_range": stats["loudness_range"], "is_wall": False,
+        }
     loudest_avg = max(audible)
 
-    # Label intro/tail/break segments (>12 dB below loudest)
-    quiet_threshold = 10.0
+    # Label segments by type relative to loudest
+    body_threshold = 4.0    # within this of loudest = body of the song
+    brief_threshold = 3.0   # seconds — too short to automate
+
     for i, seg in enumerate(segments):
-        if seg["avg_lufs"] <= -60 or (loudest_avg - seg["avg_lufs"]) > quiet_threshold:
+        duration = seg["end_time"] - seg["start_time"]
+        delta = loudest_avg - seg["avg_lufs"]
+
+        if seg["avg_lufs"] <= -60:
+            seg["label"] = "silence"
+        elif delta <= body_threshold:
+            # Close to loudest — this is the body of the song
+            if duration < brief_threshold:
+                seg["label"] = "brief"
+            else:
+                seg["label"] = "body"
+        else:
+            # Quieter than body
             if i == 0:
                 seg["label"] = "intro"
             elif i == len(segments) - 1:
                 seg["label"] = "tail"
+            elif duration < brief_threshold:
+                seg["label"] = "brief"
             else:
-                seg["label"] = "break"
+                seg["label"] = "dip"
 
-    print(f"\n{'#':<4} {'TIME RANGE':<14} {'AVG LUFS':>10} {'GAIN':>10}")
-    print("-" * 42)
+    body_segs = [s for s in segments if s["label"] == "body"]
+    dip_segs = [s for s in segments if s["label"] == "dip"]
+
+    # Wall-to-wall: only 1 body section, no dips
+    is_wall = len(body_segs) <= 1 and not dip_segs and body_segs
+
+    label_display = {
+        "body": "LOUD", "dip": "soft", "intro": "·",
+        "tail": "·", "brief": "·", "silence": "·",
+    }
+
+    print(f"\n{'#':<4} {'TIME RANGE':<14} {'LUFS':>7} {'GAIN':>9}  {'':>4}")
+    print("-" * 46)
 
     for i, seg in enumerate(segments, 1):
         time_range = f"{format_time_short(seg['start_time'])} - {format_time_short(seg['end_time'])}"
+        label = seg["label"]
+        tag = label_display.get(label, "")
 
-        if seg["avg_lufs"] <= -60:
+        if label == "silence":
             avg_str = "silence"
-            gain_str = f"({seg.get('label', '-')})" if "label" in seg else "-"
-        elif "label" in seg:
-            avg_str = f"{seg['avg_lufs']:+.1f}"
-            gain_str = f"({seg['label']})"
+            gain_str = "-"
         elif target_lufs is not None:
             avg_str = f"{seg['avg_lufs']:+.1f}"
             gain = target_lufs - seg["avg_lufs"]
@@ -270,14 +322,89 @@ def analyze_segments(filepath: str, threshold: float = 4.0, min_len: float = 5.0
             gain = loudest_avg - seg["avg_lufs"]
             gain_str = f"{gain:+.1f} dB" if abs(gain) > 0.5 else "ok"
 
-        print(f"{i:<4} {time_range:<14} {avg_str:>10} {gain_str:>10}")
+        print(f"{i:<4} {time_range:<14} {avg_str:>7} {gain_str:>9}  {tag:>4}")
 
-    print()
-    if target_lufs is not None:
-        print(f"GAIN = adjust to reach reference target ({target_lufs:+.1f} LUFS)")
-        print(f"       (limiter will handle the rest — these are starting points)")
+    # Compute body stats for return value and output
+    body_avg = statistics.mean(s["avg_lufs"] for s in body_segs) if body_segs else None
+    body_gain = (target_lufs - body_avg) if target_lufs is not None and body_avg is not None else None
+    peak_after_gain = (stats["true_peak"] + body_gain) if body_gain is not None else None
+
+    int_str = f"{stats['integrated_lufs']:+.1f} LUFS" if stats['integrated_lufs'] else "N/A"
+    lra_str = f"{stats['loudness_range']:.1f} LU" if stats['loudness_range'] else "N/A"
+    print(f"\n  Integrated: {int_str}    LRA: {lra_str}")
+
+    peak_line = f"  True peak: {stats['true_peak']:+.1f} dBFS"
+    if peak_after_gain is not None:
+        peak_line += f" → {peak_after_gain:+.1f} after gain"
+        if peak_after_gain > -0.3:
+            peak_line += "  !! WILL CLIP"
+    print(peak_line)
+
+    if is_wall:
+        seg = body_segs[0]
+        if target_lufs is not None:
+            print(f"\n  Wall-to-wall → {body_gain:+.1f} dB to target")
+        else:
+            print(f"\n  Wall-to-wall at {seg['avg_lufs']:+.1f} LUFS")
     else:
-        print(f"GAIN = adjust to match loudest section ({loudest_avg:+.1f} LUFS avg)")
+        if body_segs:
+            body_min = min(s["avg_lufs"] for s in body_segs)
+            body_max = max(s["avg_lufs"] for s in body_segs)
+            body_spread = body_max - body_min
+            body_time = sum(s["end_time"] - s["start_time"] for s in body_segs)
+            total_time = segments[-1]["end_time"] - segments[0]["start_time"]
+
+            if target_lufs is not None:
+                print(f"\n  Body: {len(body_segs)} section{'s' if len(body_segs) != 1 else ''}"
+                      f" avg {body_avg:+.1f} LUFS → {body_gain:+.1f} dB to target"
+                      f"  ({format_time_short(body_time)}/{format_time_short(total_time)})")
+            else:
+                print(f"\n  Body: {len(body_segs)} section{'s' if len(body_segs) != 1 else ''}"
+                      f" avg {body_avg:+.1f} LUFS"
+                      f"  ({format_time_short(body_time)}/{format_time_short(total_time)})")
+
+            if body_spread < 1.5:
+                print(f"  Consistent ({body_spread:.1f} dB spread) — no per-section automation needed")
+            elif body_spread > 2.0:
+                print(f"  Spread: {body_spread:.1f} dB across body ({body_min:+.1f} to {body_max:+.1f})")
+
+        if dip_segs:
+            dip_count = len(dip_segs)
+            dip_avg = statistics.mean(s["avg_lufs"] for s in dip_segs)
+            print(f"  {dip_count} dip{'s' if dip_count != 1 else ''}"
+                  f" avg {dip_avg:+.1f} LUFS — intentional dynamics, don't flatten")
+
+    return {
+        "name": stats["name"], "body_avg": body_avg, "body_gain": body_gain,
+        "true_peak": stats["true_peak"], "peak_after_gain": peak_after_gain,
+        "integrated_lufs": stats["integrated_lufs"],
+        "loudness_range": stats["loudness_range"], "is_wall": is_wall,
+    }
+
+
+def stats_from_output(filepath: str, output: str) -> dict | None:
+    """Parse ffmpeg ebur128 output into stats dict."""
+    path = Path(filepath)
+    data = parse_ebur128_output(output)
+
+    if not data["momentary_values"]:
+        return None
+
+    values = data["momentary_values"]
+    st_values = data["short_term_values"]
+    return {
+        "name": path.name,
+        "path": filepath,
+        "true_peak": data["true_peak"] if data["true_peak"] is not None else -100,
+        "integrated_lufs": data["integrated_lufs"],
+        "min_lufs": min(values),
+        "max_lufs": max(values),
+        "median_lufs": statistics.median(values),
+        "loudness_range": data["loudness_range"],
+        "timestamps": data["timestamps"],
+        "momentary_values": values,
+        "short_term_values": st_values,
+    }
 
 
 def get_audio_stats(filepath: str) -> dict | None:
@@ -292,25 +419,10 @@ def get_audio_stats(filepath: str) -> dict | None:
         print(f"Error: {path.name} - {error}", file=sys.stderr)
         return None
 
-    data = parse_ebur128_output(output)
-
-    if not data["momentary_values"]:
+    stats = stats_from_output(filepath, output)
+    if stats is None:
         print(f"Error: Could not parse loudness data for {path.name}", file=sys.stderr)
-        return None
-
-    values = data["momentary_values"]
-    return {
-        "name": path.name,
-        "path": filepath,
-        "true_peak": data["true_peak"] if data["true_peak"] is not None else -100,
-        "integrated_lufs": data["integrated_lufs"],
-        "min_lufs": min(values),
-        "max_lufs": max(values),
-        "median_lufs": statistics.median(values),
-        "loudness_range": data["loudness_range"],
-        "timestamps": data["timestamps"],
-        "momentary_values": values,
-    }
+    return stats
 
 
 def analyze_single(filepath: str, change_threshold: float = 3.0):
@@ -588,9 +700,10 @@ def compare_to_refs(track_paths: list[str], ref_paths: list[str]):
     print(f"        negative = quieter, positive = louder than refs")
 
 
-def main():
+def _build_parser(parser=None):
     import argparse
-    parser = argparse.ArgumentParser(description="Audio loudness analysis for mastering")
+    if parser is None:
+        parser = argparse.ArgumentParser(description="Audio loudness analysis for mastering")
     parser.add_argument("files", nargs="*", help="Audio file(s) to analyze")
     parser.add_argument("-r", "--refs", nargs="+", help="Reference tracks to compare against")
     parser.add_argument("-cmp", "--compare", action="store_true",
@@ -605,40 +718,68 @@ def main():
                         help="Minimum segment length in seconds (default: 5.0)")
     parser.add_argument("-c", "--ceiling", type=float, default=-1.0,
                         help="Target ceiling in dBFS (default: -1.0)")
-    args = parser.parse_args()
+    return parser
 
+
+def _print_segment_summary(results: list[dict]):
+    max_name = min(30, max(len(r["name"]) for r in results))
+    print(f"\nSUMMARY")
+    print(f"{'TRACK':{max_name}}  {'BODY':>7}  {'GAIN':>7}  {'PEAK':>7}  {'AFTER':>7}")
+    print("-" * (max_name + 36))
+    for r in results:
+        name = r["name"][:max_name]
+        body_str = f"{r['body_avg']:+.1f}" if r["body_avg"] is not None else "-"
+        gain_str = f"{r['body_gain']:+.1f}" if r["body_gain"] is not None else "-"
+        peak_str = f"{r['true_peak']:+.1f}"
+        if r["peak_after_gain"] is not None:
+            after_str = f"{r['peak_after_gain']:+.1f}"
+            flag = "  !! CLIP" if r["peak_after_gain"] > -0.3 else "  ok"
+        else:
+            after_str = "-"
+            flag = ""
+        print(f"{name:{max_name}}  {body_str:>7}  {gain_str:>7}  {peak_str:>7}  {after_str:>7}{flag}")
+
+
+def _dispatch(args):
     if not shutil.which("ffmpeg"):
         print("Error: ffmpeg not found. Install with: brew install ffmpeg", file=sys.stderr)
         sys.exit(1)
 
     if args.segments:
-        # Segment analysis mode
         if not args.files:
             print("Error: segment mode requires at least one file", file=sys.stderr)
             sys.exit(1)
 
         target_lufs = None
         if args.refs:
-            ref_stats = []
+            ref_results = []
             for fp in args.refs:
-                stats = get_audio_stats(fp)
-                if stats:
-                    ref_stats.append(stats)
-            if not ref_stats:
-                print("No reference files successfully analyzed.", file=sys.stderr)
-                sys.exit(1)
-            ref_lufs = [s["integrated_lufs"] for s in ref_stats if s["integrated_lufs"]]
-            if ref_lufs:
-                target_lufs = statistics.mean(ref_lufs)
-                count = len(ref_lufs)
-                print(f"Reference target: {target_lufs:+.1f} LUFS (avg of {count} reference{'s' if count != 1 else ''})\n")
+                result = analyze_segments(fp, args.threshold, args.min_segment)
+                if result:
+                    ref_results.append(result)
+                print()
 
+            ref_body_avgs = [r["body_avg"] for r in ref_results if r.get("body_avg") is not None]
+            if not ref_body_avgs:
+                print("No reference body levels detected.", file=sys.stderr)
+                sys.exit(1)
+            target_lufs = statistics.mean(ref_body_avgs)
+            count = len(ref_body_avgs)
+            print(f"Reference target: {target_lufs:+.1f} LUFS (body avg of {count} reference{'s' if count != 1 else ''})")
+            print("=" * 60)
+            print()
+
+        track_results = []
         for f in args.files:
-            analyze_segments(f, args.threshold, args.min_segment, target_lufs=target_lufs)
+            result = analyze_segments(f, args.threshold, args.min_segment, target_lufs=target_lufs)
+            if result:
+                track_results.append(result)
             if len(args.files) > 1:
                 print()
+
+        if len(track_results) > 1:
+            _print_segment_summary(track_results)
     elif args.changes:
-        # Show loudness change timestamps
         if not args.files:
             print("Error: changes mode requires at least one file", file=sys.stderr)
             sys.exit(1)
@@ -657,20 +798,33 @@ def main():
             if len(args.files) > 1:
                 print()
     elif args.compare and args.refs and args.files:
-        # Compare mastered tracks to references
         compare_to_refs(args.files, args.refs)
     elif args.refs and args.files:
-        # Both refs and tracks: ballpark gain mode
         analyze_against_refs(args.files, args.refs, args.ceiling)
     elif args.refs:
-        # Only refs: treat them as batch
         analyze_batch(args.refs, args.ceiling)
     elif len(args.files) == 1:
         analyze_single(args.files[0], args.threshold)
     elif args.files:
         analyze_batch(args.files, args.ceiling)
     else:
+        print("No files specified. Use -h for help.", file=sys.stderr)
+        sys.exit(1)
+
+
+def register_subcommand(subparsers):
+    parser = subparsers.add_parser("loudness", help="Loudness analysis (LUFS, peak, LRA)")
+    _build_parser(parser)
+    parser.set_defaults(func=_dispatch)
+
+
+def main():
+    parser = _build_parser()
+    args = parser.parse_args()
+    if not args.files and not args.refs:
         parser.print_help()
+        return
+    _dispatch(args)
 
 
 if __name__ == "__main__":
