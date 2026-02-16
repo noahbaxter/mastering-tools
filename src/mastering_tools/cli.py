@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from mastering_tools import loudness, declick, spectrum, crest, stereo, dynamics, check
+from mastering_tools import loudness, declick, spectrum, crest, stereo, dynamics, check, compare
 
 
 def main():
@@ -20,6 +20,7 @@ def main():
     stereo.register_subcommand(subparsers)
     dynamics.register_subcommand(subparsers)
     check.register_subcommand(subparsers)
+    compare.register_subcommand(subparsers)
 
     args = parser.parse_args()
     if not args.command:
