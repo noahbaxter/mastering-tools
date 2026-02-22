@@ -6,11 +6,11 @@ from pathlib import Path
 
 import numpy as np
 
-from mastering_tools.utils import (
+from audio_tools.utils import (
     load_audio_mono, compute_ltas, band_energies, compute_rms, db,
     add_files_arg, add_refs_arg, truncate_name,
 )
-from mastering_tools.loudness import get_audio_stats
+from audio_tools.loudness import get_audio_stats
 
 
 def analyze_crest(filepath: str, loudness_stats: dict | None = None,

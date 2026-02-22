@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from mastering_tools.utils import (
+from audio_tools.utils import (
     BANDS, BAND_NAMES, load_audio, compute_rms, db,
     add_files_arg, add_refs_arg, truncate_name,
 )

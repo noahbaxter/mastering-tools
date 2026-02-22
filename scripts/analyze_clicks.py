@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from mastering_tools.declick import detect_dropouts, detect_ratio_clicks, detect_clicks, group_consecutive
+from audio_tools.declick import detect_dropouts, detect_ratio_clicks, detect_clicks, group_consecutive
 
 
 def phase_cancel(original: np.ndarray, fixed: np.ndarray) -> np.ndarray:

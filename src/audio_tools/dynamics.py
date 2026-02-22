@@ -4,10 +4,10 @@ import statistics
 import sys
 from pathlib import Path
 
-from mastering_tools.utils import (
+from audio_tools.utils import (
     add_files_arg, add_refs_arg, add_plot_arg, truncate_name, try_import_matplotlib,
 )
-from mastering_tools.loudness import get_audio_stats
+from audio_tools.loudness import get_audio_stats
 
 
 def analyze_dynamics(filepath: str, loudness_stats: dict | None = None,

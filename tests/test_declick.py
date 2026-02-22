@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mastering_tools.declick import detect_clicks, repair_clicks, process_audio
+from audio_tools.declick import detect_clicks, repair_clicks, process_audio
 
 
 class TestDetectClicks:
@@ -414,7 +414,7 @@ class TestRealAudio:
         import sys
         output_path = tmp_path / "output.wav"
         result = subprocess.run(
-            [sys.executable, "-m", "mastering_tools.declick", "-d", str(self.FIXTURE_PATH), "-o", str(output_path), "-v"],
+            [sys.executable, "-m", "audio_tools.declick", "-d", str(self.FIXTURE_PATH), "-o", str(output_path), "-v"],
             capture_output=True,
             text=True
         )

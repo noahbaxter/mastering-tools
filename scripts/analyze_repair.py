@@ -109,7 +109,7 @@ def print_analysis(original: np.ndarray, repaired: np.ndarray,
 
     # Try to detect which detector flagged each sample
     try:
-        from mastering_tools.declick import detect_dropouts, detect_ratio_clicks, detect_sync_artifacts
+        from audio_tools.declick import detect_dropouts, detect_ratio_clicks, detect_sync_artifacts
         dropout_set = set(detect_dropouts(original))
         ratio_set = set(detect_ratio_clicks(original))
         sync_set = set(detect_sync_artifacts(original))

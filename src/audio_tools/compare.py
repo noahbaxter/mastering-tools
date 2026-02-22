@@ -6,11 +6,11 @@ import sys
 import threading
 from pathlib import Path
 
-from mastering_tools.utils import (
+from audio_tools.utils import (
     BAND_NAMES, load_audio, compute_ltas,
 )
-from mastering_tools.loudness import stats_from_output
-from mastering_tools.spectrum import analyze_spectrum
+from audio_tools.loudness import stats_from_output
+from audio_tools.spectrum import analyze_spectrum
 
 BAR_WIDTH = 20
 NAME_WIDTH = 38

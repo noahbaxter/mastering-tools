@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mastering-tools"
+name = "audio-tools"
 version = "0.1.0"
 description = "CLI tools for music mastering workflow"
 requires-python = ">=3.10,<3.14"
@@ -14,12 +14,12 @@ dependencies = [
 ]
 
 [project.scripts]
-mastering = "mastering_tools.cli:main"
-declick = "mastering_tools.declick:main"
-loudness = "mastering_tools.loudness:main"
-mastering-compare = "mastering_tools.compare:main"
-normalize = "mastering_tools.normalize:main"
-stems = "mastering_tools.stems:main"
+mastering = "audio_tools.cli:main"
+declick = "audio_tools.declick:main"
+loudness = "audio_tools.loudness:main"
+mastering-compare = "audio_tools.compare:main"
+normalize = "audio_tools.normalize:main"
+stems = "audio_tools.stems:main"
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.5.0"]

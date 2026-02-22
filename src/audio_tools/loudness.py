@@ -132,7 +132,7 @@ def find_loudness_changes(timestamps: list, values: list, threshold_db: float = 
     return changes
 
 
-from mastering_tools.utils import format_timestamp, format_time_short
+from audio_tools.utils import format_timestamp, format_time_short
 
 
 def _find_transition_indices(values: list, window_samples: int, min_segment_samples: int, threshold_db: float) -> list[int]:

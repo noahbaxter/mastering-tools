@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from mastering_tools import loudness, declick, spectrum, crest, stereo, dynamics, check, compare
+from audio_tools import loudness, declick, spectrum, crest, stereo, dynamics, check, compare
 
 
 def main():

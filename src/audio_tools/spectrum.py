@@ -4,7 +4,7 @@ import statistics
 import sys
 from pathlib import Path
 
-from mastering_tools.utils import (
+from audio_tools.utils import (
     BANDS, BAND_NAMES, BAND_ABBREVS,
     load_audio_mono, compute_ltas, band_energies, add_files_arg, add_refs_arg,
     add_plot_arg, truncate_name, try_import_matplotlib,

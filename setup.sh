@@ -22,13 +22,13 @@ if [[ ! -d "$VENV_DIR" ]]; then
 fi
 
 # Install package into the existing venv
-echo -e "Installing ${CYAN}mastering-tools${RESET} into venv..."
+echo -e "Installing ${CYAN}audio-tools${RESET} into venv..."
 "$VENV_DIR/bin/pip" install -e "$SCRIPT_DIR" --quiet
 
 # Remove old pipx install if present
-if pipx list 2>/dev/null | grep -q mastering-tools; then
+if pipx list 2>/dev/null | grep -q audio-tools; then
     echo -e "Removing old pipx install..."
-    pipx uninstall mastering-tools 2>/dev/null || true
+    pipx uninstall audio-tools 2>/dev/null || true
 fi
 
 # Symlink entry points to ~/.local/bin

@@ -117,7 +117,7 @@ def try_import_matplotlib():
         import matplotlib.pyplot as plt
         return plt, None
     except ImportError:
-        return None, "matplotlib not installed. Install with: pip install mastering-tools[plot]"
+        return None, "matplotlib not installed. Install with: pip install audio-tools[plot]"
 
 
 def format_timestamp(seconds: float) -> str:
